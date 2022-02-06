@@ -7,5 +7,5 @@
 ---                           | ---
 |``readableTime(timestamp)``  |Convert timestamp to readable time|
 |``blinkLight(GPIO)``         |Blink lights on board when connecting to network|
-|``FetchBusses(stopCode)``    |Make API call|
-|``JSON.parse(String)``       |Digest JSON|
+|``FetchBusses(stopCode, direction)``    |Make API call|
+|``JSON.parse(String)`` equivalent      |Digest JSON|

@@ -1,293 +1,219 @@
-// Libraries
-#include <Wire.h>  // This library is already built in to the Arduino IDE
-#include <LiquidCrystal_I2C.h> //This library you can add via Include Library > Manage Library > 
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
 #include "RTClib.h"
+#include "config.h"
 
-// Init screen via i2c
 LiquidCrystal_I2C lcd(0x3F, 20, 4);
-
-// Setup vars
-const char* ssid = "ENTER_SSID";// put your local wifi info here
-const char* password = "ENTER_PASSWORD";// put your local wifi info here
-int pin_led = 2;
-int pin_led2 = 16;
-int btn = 0;
-int switch1 = 14;
-int switch2 = 12;
-int looped = 25;
-int stat;
-
+WiFiClient client;
+HTTPClient http;
 RTC_Millis rtc;
-int hr_24, hr_12;
-uint8_t Min;
-int a,b,c,a2,b2,c2;
-int accurateTime = 0;
+unsigned long lastUpdateMillis = 0;
+bool isTimeSynced = false;
 
-const char* host = "bustime.mta.info";
-const char* key = "INSERT_YOU_API_KEY";
-const char* opr = "MTA";
-const char* Stop = "300982";
-const char* Stop2 = "307195";
-const char* Stop3 = "300958";
-int next = 2;
-
-byte customChar[8] = {
-  0b10101,
-  0b00000,
-  0b10001,
-  0b00100,
-  0b00100,
-  0b10001,
-  0b00000,
-  0b10101
-};
-byte reload[8] = {
-  0b00100,
-  0b11110,
-  0b10100,
-  0b10001,
-  0b10001,
-  0b11011,
-  0b01110,
-  0b00000
-};
+byte customCharWifi[8] = {0b10101, 0b00000, 0b10001, 0b00100, 0b00100, 0b10001, 0b00000, 0b10101};
+byte customCharReload[8] = {0b00100, 0b11110, 0b10100, 0b10001, 0b10001, 0b11011, 0b01110, 0b00000};
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println();
-  Serial.println();
-  Serial.print("ESP8266 Started");
-  
-  pinMode(pin_led, OUTPUT);
-  pinMode(pin_led2, OUTPUT);
-  pinMode(btn, INPUT);
-  pinMode(switch1, INPUT_PULLUP);
-  pinMode(switch2, INPUT_PULLUP);
-  pinMode(pin_led, LOW);
-  pinMode(pin_led2, LOW);
-  
-  lcd.init();   // initializing the LCD
-  lcd.backlight(); // Enable or Turn On the backlight
-  lcd.createChar(0, customChar);
-  lcd.createChar(1, reload);
-  
-  rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
-  delay(10);
-  
- // connecting to a WiFi network
-  WiFi.hostname("ESP-8266");
-  WiFi.begin(ssid, password);
-  lcd.setCursor(5, 1);
-  lcd.print("Connecting");
-  Serial.println();
-  Serial.print("SSID: ");
-  Serial.println(ssid);
-  Serial.print("Password: ");
-  Serial.println(password);
-  lcd.setCursor(0, 2);
-  while (WiFi.status() != WL_CONNECTED) {
-    pinMode(pin_led, HIGH);
-    lcd.print(" . ");
-    delay(400);
-    pinMode(pin_led, LOW);
-    delay(400);
-  }
+	Serial.begin(115200);
+	Serial.println("\n\nESP8266 Started");
 
-  //Show wifi connection worked and display our ip!
-  pinMode(pin_led, HIGH);
-  lcd.clear();
-  lcd.setCursor(3, 0);
-  lcd.print("WiFi Connected"); 
-  lcd.setCursor(3, 1); 
-  lcd.print("IP address: ");
-  lcd.setCursor(3, 2);
-  lcd.print(WiFi.localIP());
-  lcd.setCursor(0, 3);
-  lcd.write(byte(0));
-  lcd.setCursor(19, 3);
-  lcd.write(byte(0));
-  delay(180000);
+	initHardware();
+	initLCD();
+	connectToWiFi();
 }
 
 void loop() {
-  if(looped > 30){
-    getBus();
-    looped = 0;
-  }else{
-    looped++;
-  /*
-    stat = digitalRead(switch1);
-    Serial.print("Switch 1 = ");
-    Serial.println(stat);
-    stat = digitalRead(switch2);
-    Serial.print("Switch 2 = ");
-    Serial.println(stat);
-    Serial.println("");
-  */
-    delay(1000);
-  }
+	maintainWiFi();
+	updateClock();
+
+	unsigned long currentMillis = millis();
+	if (currentMillis - lastUpdateMillis >= UPDATE_INTERVAL_MS || lastUpdateMillis == 0) {
+		lastUpdateMillis = currentMillis;
+		fetchAndDisplayBusData();
+	}
 }
 
-void getBus(){
-  WiFiClient client;
-  const int httpPort = 80;
-  if (!client.connect(host, httpPort)) {
-    Serial.println("connection failed");
-    return;
-  }
+// ==========================================
+// INITIALIZATION FUNCTIONS
+// ==========================================
 
-  // We now create a URI for the request
-  String url = "/api/siri/stop-monitoring.json";
-  url += "?key=";
-  url += key;
-  url += "&OperatorRef=";
-  url +=  opr;
-  url += "&MonitoringRef=";
-  if(digitalRead(btn) == 1){
-    if(digitalRead(switch1) == 1){
-      url += Stop;
-    }else{
-      url += Stop3;
-    }
-  }else{
-    url += Stop2;
-  }
-  url += "&MaximumStopVisits=";
-  url += next;
-  //Serial.print("btn: ");
-  //Serial.println(digitalRead(btn));
-  //Serial.print("switch1: ");
-  //Serial.println(digitalRead(switch1));
+void initHardware() {
+	pinMode(PIN_LED_STATUS, OUTPUT);
+	pinMode(PIN_LED_BUSY, OUTPUT);
+	pinMode(PIN_BTN, INPUT);
+	pinMode(PIN_SWITCH_1, INPUT_PULLUP);
+	pinMode(PIN_SWITCH_2, INPUT_PULLUP);
 
-  lcd.setCursor(19, 0);
-  lcd.write(byte(1));
-  pinMode(pin_led2, HIGH);
-  
-  //Serial.println(url);
-  
-  // This will send the request to the server
-  client.println("GET " + url + " HTTP/1.1");
-  client.println("Host: bustime.mta.info");
-  client.println("Connection: close\r\n");
-  delay(1000);
+	digitalWrite(PIN_LED_STATUS, LOW);
+	digitalWrite(PIN_LED_BUSY, LOW);
 
-  // Read all the lines of the reply from server and print them to Serial
-  if(client.available()){
-    //long line = client.read();
-    //Serial.print(line);
-
-  //int num = 0;
-   //This is just a text search, not fancy.
-    lcd.clear();
-    pinMode(pin_led2, LOW);
-    lcd.setCursor(0, 0);
-    lcd.print("Next 2 B9 Buses");
-    
-    if(accurateTime != 1){
-      accurateTime = 1;
-      client.findUntil("ResponseTimestamp\":\"" ,"");
-      String rightYear = client.readStringUntil('-');
-      String rightMonth = client.readStringUntil('-');
-      String rightDay = client.readStringUntil('T');
-      String rightHour = client.readStringUntil(':');
-      String rightMinutes = client.readStringUntil(':');
-      String rightSeconds = client.readStringUntil('.');
-      int rYr = rightYear.toInt();
-      int rMo = rightMonth.toInt();
-      int rDy = rightDay.toInt();
-      int rSec = rightSeconds.toInt();
-      int rMin = rightMinutes.toInt();
-      int rHr = rightHour.toInt();
-      //rtc.adjust(DateTime(F(rightDate), F(rightHour+ ","+ rightMinutes + ","+ rightSeconds)));
-      rtc.adjust(DateTime(rYr, rMo, rDy, rHr, rMin, rSec));
-      //rtc.adjust(DateTime(rightDate));
-    }
-    Time();
-    
-    client.findUntil("ExpectedArrivalTime\":\"" ,"");
-    String rightDate = client.readStringUntil('T');
-    String hr = client.readStringUntil(':');
-    String minutes = client.readStringUntil(':');
-    String sec = client.readStringUntil('.');
-    client.findUntil("PresentableDistance\":\"" ,"");
-    String nextBusStop = client.readStringUntil(' a');
-    if(nextBusStop != ""){
-      a = hr.toInt();
-      b = minutes.toInt();
-      c = sec.toInt();
-      if(a==00){
-          a = 12;
-      }else if(a==12){
-          a = 12;
-      }else{
-          a = a%12;
-      }
-      if(b==0){
-        minutes = "00";
-      }else if(b<10){
-        minutes = "0" + String(b);
-      }else{
-        minutes = String(b);
-      }
-      lcd.setCursor(0, 1);
-      lcd.print(String(a) +":"+ String(minutes) +" , "+ nextBusStop);
-    }
-    
-    client.findUntil("ExpectedArrivalTime\":\"" ,"");
-    client.findUntil("T","");
-    String hr2 = client.readStringUntil(':');
-    String minutes2 = client.readStringUntil(':');
-    String sec2 = client.readStringUntil('.');
-    client.findUntil("PresentableDistance\":\"" ,"");
-    String nbs = client.readStringUntil(' a');
-    if(nbs != ""){
-      a2 = hr2.toInt();
-      b2 = minutes2.toInt();
-      c2 = sec2.toInt();
-      if(a2==00){
-        a2 = 12;
-      }else if(a2==12){
-          a = 12;
-      }else{
-        a2 = a2%12;
-      }
-      if(b2==0){
-        minutes2 = "00";
-      }else if(b2<10){
-        minutes2 = "0" + String(b2);
-      }else{
-        minutes2 = String(b2);
-      }
-      lcd.setCursor(0, 2);
-      lcd.print(String(a2) +":"+ String(minutes2) +" , "+ nbs);
-    }
-  }
+	// Initial rough time
+	rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
 }
 
-void Time(){
+void initLCD() {
+	lcd.init();
+	lcd.backlight();
+	lcd.createChar(0, customCharWifi);
+	lcd.createChar(1, customCharReload);
+}
+
+void connectToWiFi() {
+	WiFi.hostname("ESP8266");
+	WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+	lcd.setCursor(5, 1);
+	lcd.print("Connecting");
+
+	while (WiFi.status() != WL_CONNECTED) {
+		digitalWrite(PIN_LED_STATUS, HIGH);
+		lcd.print(".");
+		delay(400);
+		digitalWrite(PIN_LED_STATUS, LOW);
+		delay(400);
+	}
+
+	digitalWrite(PIN_LED_STATUS, HIGH);
+	lcd.clear();
+	lcd.setCursor(3, 0);
+	lcd.print("WiFi Connected");
+	lcd.setCursor(3, 1);
+	lcd.print("IP address: ");
+	lcd.setCursor(3, 2);
+	lcd.print(WiFi.localIP());
+	lcd.setCursor(0, 3);
+	lcd.write(byte(0));
+	lcd.setCursor(19, 3);
+	lcd.write(byte(0));
+
+	delay(3000);
+	lcd.clear();
+}
+
+void maintainWiFi() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi lost. Reconnecting...");
+        lcd.setCursor(19, 3);
+        lcd.print("!");
+        
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        
+        int retry = 0;
+        while (WiFi.status() != WL_CONNECTED && retry < 10) {
+            delay(500);
+            retry++;
+        }
+    }
+}
+
+// ==========================================
+// CORE APPLICATION LOGIC
+// ==========================================
+
+void fetchAndDisplayBusData() {
+	String selectedStop = STOP_ALT_2;
+	if (digitalRead(PIN_BTN) == HIGH) {
+		selectedStop = (digitalRead(PIN_SWITCH_1) == HIGH) ? STOP_MAIN : STOP_ALT_2;
+	}
+
+	const String fullUrl = "http://" + String(API_HOST) + "/api/siri/stop-monitoring.json" +
+						   "?key=" + API_KEY +
+						   "&OperatorRef=" + API_OPERATOR +
+						   "&MonitoringRef=" + selectedStop +
+						   "&MaximumStopVisits=" + MAX_BUS_COUNT;
+
+	lcd.setCursor(19, 0);
+	lcd.write(byte(1));
+	digitalWrite(PIN_LED_BUSY, HIGH);
+
+	http.setReuse(true);
+	if (http.begin(client, fullUrl)) {
+		int httpCode = http.GET();
+
+		if (httpCode == HTTP_CODE_OK) {
+			WiFiClient &stream = http.getStream();
+			parseBusDataWithJSON(stream);
+		} else {
+			Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
+		}
+		http.end();
+	} else {
+		Serial.println("[HTTP] Unable to connect");
+	}
+}
+
+void parseBusDataWithJSON(WiFiClient &client) {
+	JsonDocument filter;
+	filter["Siri"]["ServiceDelivery"]["ResponseTimestamp"] = true;
+	JsonObject visitFilter = filter["Siri"]["ServiceDelivery"]["StopMonitoringDelivery"][0]["MonitoredStopVisit"][0];
+	visitFilter["MonitoredVehicleJourney"]["DestinationName"] = true;
+	visitFilter["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"] = true;
+	visitFilter["MonitoredVehicleJourney"]["MonitoredCall"]["Extensions"]["Distances"]["PresentableDistance"] = true;
+	visitFilter["MonitoredVehicleJourney"]["MonitoredCall"]["Extensions"]["StopsFromCall"] = true;
+
+	JsonDocument doc;
+	DeserializationError error = deserializeJson(doc, client, DeserializationOption::Filter(filter));
+
+	if (error) {
+		Serial.print("JSON Parsing failed: ");
+		Serial.println(error.c_str());
+		return;
+	}
+
+	const char* ts = doc["Siri"]["ServiceDelivery"]["ResponseTimestamp"].as<const char*>();
+    if (ts != nullptr) {
+        int year, month, day, hr, mn, sec;
+        if (sscanf(ts, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hr, &mn, &sec) == 6) {
+            rtc.adjust(DateTime(year, month, day, hr, mn, sec));
+            isTimeSynced = true;
+        }
+    }
+
+	JsonArray buses = doc["Siri"]["ServiceDelivery"]["StopMonitoringDelivery"][0]["MonitoredStopVisit"];
+
+	lcd.clear();
+	if (buses.isNull() || buses.size() == 0) {
+		lcd.setCursor(0, 0);
+		lcd.print("No buses found");
+		return;
+	}
+
+	for (int row = 0; row < MAX_BUS_COUNT && row < buses.size(); row++) {
+		JsonObject bus = buses[row];
+		const char* arrivalTimeRaw = bus["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"];
+		const char* distance = bus["MonitoredVehicleJourney"]["MonitoredCall"]["Extensions"]["Distances"]["PresentableDistance"];
+
+		if (!arrivalTimeRaw) {
+			continue;
+		}
+
+		int hr, mn, sec;
+		// We only need hr and mn, so we use %*d to skip the year/month/day/sec
+		// Format: 2026-03-08T14:05:00Z
+		if (sscanf(arrivalTimeRaw, "%*d-%*d-%*dT%d:%d:%d", &hr, &mn, &sec) == 3) {
+			int displayHr = (hr % 12 == 0) ? 12 : (hr % 12);
+			char buffer[21];
+
+			snprintf(buffer, sizeof(buffer), "%d:%02d, %s",
+					displayHr, mn,
+					distance ? distance : "N/A");
+
+			lcd.setCursor(0, row + 1);
+			lcd.print(buffer);
+		}
+	}
+}
+
+void updateClock() {
   DateTime now = rtc.now();
-  hr_24 = now.hour();
-  Min = now.minute();
-  if (hr_24==00){
-    hr_12=12;
-  }if (hr_24==12){
-    hr_12=12;
-  }else{
-  hr_12=hr_24%12;
-  }
-  lcd.setCursor(8, 3);
-  lcd.print(hr_12, DEC);
-  lcd.print(':');
-    if (Min==0){
-    lcd.print("00");
-  }
-  else if (Min < 10){
-    lcd.print("0");
-    lcd.print(now.minute(),DEC);
-  }
-  else{
-    lcd.print(now.minute(), DEC);
-  }
-}
+  int displayHr = (now.hour() % 12 == 0) ? 12 : (now.hour() % 12);
 
+  char timeBuffer[9];
+  snprintf(timeBuffer, sizeof(timeBuffer), "%2d:%02d", displayHr, now.minute());
+
+  lcd.setCursor(8, 3);
+  lcd.print(timeBuffer);
+}
